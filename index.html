@@ -39,7 +39,7 @@
       <span id="backendStatus" class="kpi">Backend: not set</span>
       <span id="matchCount" class="kpi">Matches: 0</span>
       <div class="right row">
-        <input id="backendUrl" placeholder="Paste your backend URL (https://...onrender.com)" style="min-width:360px" />
+        <input id="backendUrl" placeholder="Paste your backend URL (https://...onrender.com)" style="min-width:420px" />
         <button class="btn secondary" id="saveBackend">Save</button>
       </div>
     </div>
@@ -49,27 +49,39 @@
       <div class="grid">
         <div>
           <label>Revenue Minimum (USD)</label>
-          <input id="revenue_min" type="number" placeholder="e.g. 50,000,000">
+          <input id="revenue_min" type="text" inputmode="numeric" placeholder="$50,000,000" data-currency>
         </div>
         <div>
           <label>Revenue Maximum (USD)</label>
-          <input id="revenue_max" type="number" placeholder="e.g. 2,000,000,000">
+          <input id="revenue_max" type="text" inputmode="numeric" placeholder="$2,000,000,000" data-currency>
         </div>
         <div>
           <label>Cash Flow from Ops Minimum (USD)</label>
-          <input id="cfo_min" type="number" placeholder="e.g. 5,000,000">
+          <input id="cfo_min" type="text" inputmode="numeric" placeholder="$5,000,000" data-currency>
         </div>
         <div>
           <label>Total Debt Maximum (USD)</label>
-          <input id="debt_max" type="number" placeholder="e.g. 200,000,000">
+          <input id="debt_max" type="text" inputmode="numeric" placeholder="$200,000,000" data-currency>
         </div>
         <div>
           <label>Accounts Payable Maximum (USD)</label>
-          <input id="ap_max" type="number" placeholder="e.g. 10,000,000">
+          <input id="ap_max" type="text" inputmode="numeric" placeholder="$10,000,000" data-currency>
         </div>
         <div>
           <label>Trading Volume Minimum ($ ADV)</label>
-          <input id="adv_min" type="number" placeholder="e.g. 1,000,000">
+          <input id="adv_min" type="text" inputmode="numeric" placeholder="$1,000,000" data-currency>
+        </div>
+        <div>
+          <label>Loan Size (USD)</label>
+          <input id="loan_size" type="text" inputmode="numeric" value="$3,000,000" data-currency>
+        </div>
+        <div>
+          <label>Max Payback (years)</label>
+          <input id="max_payback_years" type="number" value="4">
+        </div>
+        <div>
+          <label>Min Borrowing Base (USD)</label>
+          <input id="min_borrow_base" type="text" inputmode="numeric" value="$3,000,000" data-currency>
         </div>
         <div>
           <label>Location (State/Country)</label>
@@ -77,7 +89,7 @@
         </div>
         <div>
           <label>Exchanges</label>
-          <input id="exchanges" type="text" value="NYSE,NASDAQ,OTC">
+          <input id="exchanges" type="text" value="NASDAQ,OTC,NYSE">
         </div>
       </div>
       <div class="row" style="margin-top:14px">
@@ -100,6 +112,8 @@
               <th>Total Debt</th>
               <th>Accounts Payable</th>
               <th>ADV ($)</th>
+              <th>Borrowing Base</th>
+              <th>Payback (yrs @ Loan)</th>
               <th>Last Fundraising</th>
               <th>Location</th>
             </tr>
@@ -111,13 +125,44 @@
   </div>
 
   <script>
-    // Pre-fill your backend so you don't have to press Save
+    // --- Default backend so you don't have to press Save ---
     const DEFAULT_BACKEND_URL = 'https://deal-screener-backend-feev.onrender.com';
 
     const $ = (id) => document.getElementById(id);
     const LS_KEY = 'ds_backend_url';
 
-    function n(v){ return v==null ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:0}); }
+    // -------- Currency helpers --------
+    const moneyFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+    function toRawNumber(text){
+      if (!text) return NaN;
+      const cleaned = String(text).replace(/[^0-9.-]/g, '');
+      if (cleaned === '' || cleaned === '-' || cleaned === '.') return NaN;
+      return Number(cleaned);
+    }
+    function toCurrency(val){
+      if (val == null || val === '' || isNaN(val)) return '';
+      return '$' + moneyFormatter.format(Math.round(Number(val)));
+    }
+    function attachCurrencyBehavior(input){
+      // On focus, show raw number to make editing easy
+      input.addEventListener('focus', () => {
+        const n = toRawNumber(input.value);
+        input.value = isNaN(n) ? '' : String(Math.round(n));
+      });
+      // While typing, keep only digits and optional minus
+      input.addEventListener('input', () => {
+        const n = toRawNumber(input.value);
+        if (isNaN(n)) { input.dataset.empty = '1'; return; }
+        input.dataset.empty = '';
+      });
+      // On blur, format as $#,###
+      input.addEventListener('blur', () => {
+        const n = toRawNumber(input.value);
+        input.value = isNaN(n) ? '' : toCurrency(n);
+      });
+      // Initialize existing value
+      input.value = toCurrency(toRawNumber(input.value));
+    }
 
     function normalizeUrl(input){
       let url = (input || '').trim();
@@ -126,11 +171,9 @@
       url = url.replace(/\/$/, ''); // drop trailing slash
       return url;
     }
-
     function setBackendStatus(url){
       $('backendStatus').textContent = url ? ('Backend: ' + url) : 'Backend: not set';
     }
-
     function saveBackend(){
       const url = normalizeUrl($('backendUrl').value);
       if (!url){ $('warn').textContent = 'Please paste a valid https URL.'; return; }
@@ -139,15 +182,26 @@
       $('warn').textContent = '';
     }
 
+    function n(v){ return v==null ? '—' : moneyFormatter.format(Number(v)); }
+    function n$ (v){ return v==null ? '—' : ('$' + moneyFormatter.format(Number(v))); }
+
     async function search(){
       const base = normalizeUrl(localStorage.getItem(LS_KEY) || $('backendUrl').value || DEFAULT_BACKEND_URL);
       if (!base){ $('warn').textContent = 'Set your backend URL first.'; return; }
-      localStorage.setItem(LS_KEY, base);
-      setBackendStatus(base);
+      localStorage.setItem(LS_KEY, base); setBackendStatus(base);
 
       const params = new URLSearchParams();
-      const fields = ['revenue_min','revenue_max','cfo_min','debt_max','ap_max','adv_min','location','exchanges'];
-      for (const f of fields){ const val = ($(f).value||'').trim(); if (val) params.set(f, val); }
+      const currencyFields = ['revenue_min','revenue_max','cfo_min','debt_max','ap_max','adv_min','loan_size','min_borrow_base'];
+      const otherFields = ['max_payback_years','location','exchanges'];
+
+      for (const f of currencyFields){
+        const raw = toRawNumber($(f).value);
+        if (!isNaN(raw)) params.set(f, String(Math.round(raw)));
+      }
+      for (const f of otherFields){
+        const val = ($(f).value||'').trim();
+        if (val) params.set(f, val);
+      }
 
       const btn = $('search'); btn.disabled = true; btn.textContent = 'Searching…';
       try{
@@ -162,11 +216,13 @@
             <td>${c.ticker || '—'}</td>
             <td>${c.name || '—'}</td>
             <td>${c.exchange || '—'}</td>
-            <td>${n(c.revenueLTMUSD)}</td>
-            <td>${n(c.cfoLTMUSD)}</td>
-            <td>${n(c.totalDebtUSD)}</td>
-            <td>${n(c.accountsPayableUSD)}</td>
-            <td>${n(c.advUSD)}</td>
+            <td>${n$(c.revenueLTMUSD)}</td>
+            <td>${n$(c.cfoLTMUSD)}</td>
+            <td>${n$(c.totalDebtUSD)}</td>
+            <td>${n$(c.accountsPayableUSD)}</td>
+            <td>${n$(c.advUSD)}</td>
+            <td>${n$(c.borrowingBaseUSD)}</td>
+            <td>${c.paybackYearsAtLoan == null ? '—' : Number(c.paybackYearsAtLoan).toFixed(2)}</td>
             <td>${c.lastFundraisingDate || '—'}</td>
             <td>${c.location || '—'}</td>
           </tr>`)).join('');
@@ -179,9 +235,10 @@
     function exportCsv(){
       const rows = Array.from(document.querySelectorAll('#rows tr'));
       if (!rows.length){ $('warn').textContent = 'Nothing to export yet.'; return; }
-      const headers = ['Ticker','Name','Exchange','Revenue','CFO','Total Debt','Accounts Payable','ADV ($)','Last Fundraising','Location'];
+      const headers = ['Ticker','Name','Exchange','Revenue','CFO','Total Debt','Accounts Payable','ADV ($)','Borrowing Base','Payback (yrs @ Loan)','Last Fundraising','Location'];
       const data = rows.map(tr => Array.from(tr.children).map(td => '"' + (td.textContent||'').replaceAll('"','""') + '"'));
-      const csv = [headers.map(h=>'"'+h+'"').join(','), ...data.map(r=>r.join(','))].join('\n');
+      const csv = [headers.map(h=>'"'+h+'"').join(','), ...data.map(r=>r.join(','))].join('
+');
       const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -195,6 +252,9 @@
     $('search').addEventListener('click', search);
     $('exportCsv').addEventListener('click', exportCsv);
     $('backendUrl').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ saveBackend(); } });
+
+    // Attach currency formatting
+    document.querySelectorAll('input[data-currency]').forEach(attachCurrencyBehavior);
 
     // On load: prefill backend from localStorage or default, and show status
     (function init(){
