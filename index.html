@@ -22,6 +22,7 @@
     .btn.secondary { background:#262626; color:#fff; border:1px solid #3a3a3a; }
     .btn:disabled { opacity:.6; cursor:not-allowed; }
     .warn { color:#ffc857; font-size:14px; }
+    .error { color:#ff7b7b; font-size:14px; }
     table { width:100%; border-collapse: collapse; }
     th, td { padding: 12px 10px; border-bottom:1px solid #262626; text-align:left; font-size: 15px; }
     th { position: sticky; top: 0; background:#141414; font-size: 13px; text-transform: uppercase; letter-spacing:.03em; color:#cfcfcf; }
@@ -41,9 +42,10 @@
       <div class="right row">
         <input id="backendUrl" placeholder="Paste your backend URL (https://...onrender.com)" style="min-width:420px" />
         <button class="btn secondary" id="saveBackend">Save</button>
+        <button class="btn secondary" id="testBackend">Test</button>
       </div>
     </div>
-    <div class="sub">Daily Search (EDGAR + OTC) — set your backend URL above once, it will be remembered in this browser.</div>
+    <div class="sub">Daily Search (EDGAR + OTC) — set your backend URL above once (or use the default). If something fails, click <strong>Test</strong> to verify connectivity.</div>
 
     <div class="card">
       <div class="grid">
@@ -96,6 +98,7 @@
         <button id="search" class="btn">Search</button>
         <button id="exportCsv" class="btn secondary">Export CSV</button>
         <span class="warn" id="warn"></span>
+        <span class="error" id="err"></span>
       </div>
     </div>
 
@@ -131,6 +134,9 @@
     const $ = (id) => document.getElementById(id);
     const LS_KEY = 'ds_backend_url';
 
+    // Show any unexpected JS errors on the page (so clicking Search "does nothing" never happens silently)
+    window.addEventListener('error', (e) => { const el = $('err'); if (el) el.textContent = 'Script error: ' + (e.message || e.error); });
+
     // -------- Currency helpers --------
     const moneyFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
     function toRawNumber(text){
@@ -144,23 +150,15 @@
       return '$' + moneyFormatter.format(Math.round(Number(val)));
     }
     function attachCurrencyBehavior(input){
-      // On focus, show raw number to make editing easy
       input.addEventListener('focus', () => {
         const n = toRawNumber(input.value);
         input.value = isNaN(n) ? '' : String(Math.round(n));
       });
-      // While typing, keep only digits and optional minus
-      input.addEventListener('input', () => {
-        const n = toRawNumber(input.value);
-        if (isNaN(n)) { input.dataset.empty = '1'; return; }
-        input.dataset.empty = '';
-      });
-      // On blur, format as $#,###
+      input.addEventListener('input', () => { toRawNumber(input.value); });
       input.addEventListener('blur', () => {
         const n = toRawNumber(input.value);
         input.value = isNaN(n) ? '' : toCurrency(n);
       });
-      // Initialize existing value
       input.value = toCurrency(toRawNumber(input.value));
     }
 
@@ -171,23 +169,32 @@
       url = url.replace(/\/$/, ''); // drop trailing slash
       return url;
     }
-    function setBackendStatus(url){
-      $('backendStatus').textContent = url ? ('Backend: ' + url) : 'Backend: not set';
+    function setBackendStatus(url){ $('backendStatus').textContent = url ? ('Backend: ' + url) : 'Backend: not set'; }
+    function getBackend(){ return normalizeUrl(localStorage.getItem(LS_KEY) || $('backendUrl').value || DEFAULT_BACKEND_URL); }
+
+    async function testBackend(){
+      const base = getBackend(); if (!base){ $('err').textContent = 'No backend URL set.'; return; }
+      setBackendStatus(base);
+      try{
+        const r = await fetch(base + '/api/health');
+        const j = await r.json();
+        $('asof').textContent = j.date || '—';
+        $('warn').textContent = 'Backend OK'; $('err').textContent = '';
+      } catch(e){ $('err').textContent = 'Backend test failed: ' + (e.message||e); }
     }
+
     function saveBackend(){
       const url = normalizeUrl($('backendUrl').value);
       if (!url){ $('warn').textContent = 'Please paste a valid https URL.'; return; }
-      localStorage.setItem(LS_KEY, url);
-      setBackendStatus(url);
-      $('warn').textContent = '';
+      localStorage.setItem(LS_KEY, url); setBackendStatus(url); $('warn').textContent = ''; $('err').textContent='';
     }
 
     function n(v){ return v==null ? '—' : moneyFormatter.format(Number(v)); }
     function n$ (v){ return v==null ? '—' : ('$' + moneyFormatter.format(Number(v))); }
 
     async function search(){
-      const base = normalizeUrl(localStorage.getItem(LS_KEY) || $('backendUrl').value || DEFAULT_BACKEND_URL);
-      if (!base){ $('warn').textContent = 'Set your backend URL first.'; return; }
+      const base = getBackend();
+      if (!base){ $('err').textContent = 'Set your backend URL first.'; return; }
       localStorage.setItem(LS_KEY, base); setBackendStatus(base);
 
       const params = new URLSearchParams();
@@ -195,73 +202,77 @@
       const otherFields = ['max_payback_years','location','exchanges'];
 
       for (const f of currencyFields){
-        const raw = toRawNumber($(f).value);
+        const el = $(f); if (!el) continue;
+        const raw = toRawNumber(el.value);
         if (!isNaN(raw)) params.set(f, String(Math.round(raw)));
       }
-      for (const f of otherFields){
-        const val = ($(f).value||'').trim();
-        if (val) params.set(f, val);
-      }
+      for (const f of otherFields){ const el = $(f); if (!el) continue; const v = (el.value||'').trim(); if (v) params.set(f, v); }
 
-      const btn = $('search'); btn.disabled = true; btn.textContent = 'Searching…';
+      const btn = $('search');
+      btn.disabled = true; const old = btn.textContent; btn.textContent = 'Searching…';
+      $('warn').textContent = ''; $('err').textContent = '';
       try{
-        const res = await fetch(`${base}/api/search?` + params.toString());
+        const url = base + '/api/search?' + params.toString();
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         $('asof').textContent = data.date || '—';
         const rows = data.items || [];
         $('matchCount').textContent = 'Matches: ' + rows.length;
         const tbody = $('rows');
-        tbody.innerHTML = rows.map(c => (
-          `<tr>
-            <td>${c.ticker || '—'}</td>
-            <td>${c.name || '—'}</td>
-            <td>${c.exchange || '—'}</td>
-            <td>${n$(c.revenueLTMUSD)}</td>
-            <td>${n$(c.cfoLTMUSD)}</td>
-            <td>${n$(c.totalDebtUSD)}</td>
-            <td>${n$(c.accountsPayableUSD)}</td>
-            <td>${n$(c.advUSD)}</td>
-            <td>${n$(c.borrowingBaseUSD)}</td>
-            <td>${c.paybackYearsAtLoan == null ? '—' : Number(c.paybackYearsAtLoan).toFixed(2)}</td>
-            <td>${c.lastFundraisingDate || '—'}</td>
-            <td>${c.location || '—'}</td>
-          </tr>`)).join('');
-        $('warn').textContent = '';
-      } catch(e){
-        $('warn').textContent = 'Search failed. Is your backend URL correct?';
-      } finally { btn.disabled = false; btn.textContent = 'Search'; }
+        tbody.innerHTML = rows.map(function(c){
+          return '<tr>'+
+            '<td>'+ (c.ticker || '—') +'</td>'+
+            '<td>'+ (c.name || '—') +'</td>'+
+            '<td>'+ (c.exchange || '—') +'</td>'+
+            '<td>'+ n$(c.revenueLTMUSD) +'</td>'+
+            '<td>'+ n$(c.cfoLTMUSD) +'</td>'+
+            '<td>'+ n$(c.totalDebtUSD) +'</td>'+
+            '<td>'+ n$(c.accountsPayableUSD) +'</td>'+
+            '<td>'+ n$(c.advUSD) +'</td>'+
+            '<td>'+ n$(c.borrowingBaseUSD) +'</td>'+
+            '<td>'+ (c.paybackYearsAtLoan==null ? '—' : Number(c.paybackYearsAtLoan).toFixed(2)) +'</td>'+
+            '<td>'+ (c.lastFundraisingDate || '—') +'</td>'+
+            '<td>'+ (c.location || '—') +'</td>'+
+          '</tr>';
+        }).join('');
+      } catch(e){ $('err').textContent = 'Search failed: ' + (e.message||e); }
+      finally { btn.disabled = false; btn.textContent = old; }
     }
 
     function exportCsv(){
       const rows = Array.from(document.querySelectorAll('#rows tr'));
       if (!rows.length){ $('warn').textContent = 'Nothing to export yet.'; return; }
       const headers = ['Ticker','Name','Exchange','Revenue','CFO','Total Debt','Accounts Payable','ADV ($)','Borrowing Base','Payback (yrs @ Loan)','Last Fundraising','Location'];
-      const data = rows.map(tr => Array.from(tr.children).map(td => '"' + (td.textContent||'').replaceAll('"','""') + '"'));
-      const csv = [headers.map(h=>'"'+h+'"').join(','), ...data.map(r=>r.join(','))].join('
+      const data = rows.map(function(tr){ return Array.from(tr.children).map(function(td){ return '"' + (td.textContent||'').replace(/\"/g,'""') + '"'; }); });
+      const csv = [headers.map(function(h){return '"'+h+'"';}).join(','), ...data.map(function(r){return r.join(',');})].join('
 ');
       const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'deal_screener_results.csv';
-      document.body.appendChild(a); a.click(); a.remove();
-      $('warn').textContent = '';
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'deal_screener_results.csv';
+      document.body.appendChild(a); a.click(); a.remove(); $('warn').textContent = '';
     }
 
     // Wire up
-    $('saveBackend').addEventListener('click', saveBackend);
-    $('search').addEventListener('click', search);
-    $('exportCsv').addEventListener('click', exportCsv);
-    $('backendUrl').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ saveBackend(); } });
+    document.addEventListener('DOMContentLoaded', function(){
+      $('saveBackend').addEventListener('click', saveBackend);
+      $('testBackend').addEventListener('click', testBackend);
+      $('search').addEventListener('click', search);
+      $('exportCsv').addEventListener('click', exportCsv);
+      $('backendUrl').addEventListener('keydown', function(e){ if(e.key==='Enter'){ saveBackend(); } });
 
-    // Attach currency formatting
-    document.querySelectorAll('input[data-currency]').forEach(attachCurrencyBehavior);
+      // Attach currency formatting
+      document.querySelectorAll('input[data-currency]').forEach(attachCurrencyBehavior);
 
-    // On load: prefill backend from localStorage or default, and show status
-    (function init(){
-      const saved = normalizeUrl(localStorage.getItem(LS_KEY) || DEFAULT_BACKEND_URL);
-      $('backendUrl').value = saved;
-      if (saved) { localStorage.setItem(LS_KEY, saved); setBackendStatus(saved); }
-    })();
+      // Init backend field and status
+      const saved = getBackend();
+      $('backendUrl').value = saved; setBackendStatus(saved);
+
+      // Auto test backend on first load, then do a gentle default search
+      testBackend().then(function(){
+        // default: exchanges only, loan filters already defaulted in inputs
+        search();
+      });
+    });
   </script>
 </body>
 </html>
