@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Debt Deal Screener (EDGAR + OTC)</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0b0b; color:#fff; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 28px 16px 56px; }
+    h1 { font-size: 28px; margin: 0 0 4px; }
+    .sub { color:#c9c9c9; margin-bottom: 18px; font-size: 16px; }
+    .row { display:flex; align-items:center; gap:10px; flex-wrap: wrap; }
+    .card { background:#151515; border:1px solid #262626; border-radius:18px; padding: 18px; margin-bottom: 16px; }
+    .grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; }
+    @media (max-width: 950px){ .grid { grid-template-columns: 1fr; } }
+    label { display:block; font-size: 16px; margin: 6px 0; color:#fafafa; }
+    input { width:100%; padding: 12px 14px; font-size: 18px; border-radius: 12px; border:1px solid #3a3a3a; background:#1d1d1d; color:#fff; }
+    input::placeholder { color:#9a9a9a; }
+    .btn { background:#fff; color:#000; font-weight:700; border:none; padding: 12px 16px; border-radius: 12px; cursor:pointer; font-size: 16px; }
+    .btn.secondary { background:#262626; color:#fff; border:1px solid #3a3a3a; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    .warn { color:#ffc857; font-size:14px; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom:1px solid #262626; text-align:left; font-size: 15px; }
+    th { position: sticky; top: 0; background:#141414; font-size: 13px; text-transform: uppercase; letter-spacing:.03em; color:#cfcfcf; }
+    .scroll { max-height: 560px; overflow:auto; border-radius: 12px; }
+    .muted { color:#9a9a9a; }
+    .kpi { display:inline-block; padding:4px 8px; border:1px solid #2f2f2f; border-radius:10px; margin-left:8px; font-size:12px; color:#c7c7c7; }
+    .right { margin-left:auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row" style="margin-bottom:8px">
+      <h1>Debt Deal Screener</h1>
+      <span id="asof" class="kpi">As‑of: —</span>
+      <span id="backendStatus" class="kpi">Backend: not set</span>
+      <span id="matchCount" class="kpi">Matches: 0</span>
+      <div class="right row">
+        <input id="backendUrl" placeholder="Paste your backend URL (https://...onrender.com)" style="min-width:360px" />
+        <button class="btn secondary" id="saveBackend">Save</button>
+      </div>
+    </div>
+    <div class="sub">Daily Search (EDGAR + OTC) — set your backend URL above once, it will be remembered in this browser.</div>
+
+    <div class="card">
+      <div class="grid">
+        <div>
+          <label>Revenue Minimum (USD)</label>
+          <input id="revenue_min" type="number" placeholder="e.g. 50,000,000">
+        </div>
+        <div>
+          <label>Revenue Maximum (USD)</label>
+          <input id="revenue_max" type="number" placeholder="e.g. 2,000,000,000">
+        </div>
+        <div>
+          <label>Cash Flow from Ops Minimum (USD)</label>
+          <input id="cfo_min" type="number" placeholder="e.g. 5,000,000">
+        </div>
+        <div>
+          <label>Total Debt Maximum (USD)</label>
+          <input id="debt_max" type="number" placeholder="e.g. 200,000,000">
+        </div>
+        <div>
+          <label>Accounts Payable Maximum (USD)</label>
+          <input id="ap_max" type="number" placeholder="e.g. 10,000,000">
+        </div>
+        <div>
+          <label>Trading Volume Minimum ($ ADV)</label>
+          <input id="adv_min" type="number" placeholder="e.g. 1,000,000">
+        </div>
+        <div>
+          <label>Location (State/Country)</label>
+          <input id="location" type="text" placeholder="e.g. NY or USA">
+        </div>
+        <div>
+          <label>Exchanges</label>
+          <input id="exchanges" type="text" value="NYSE,NASDAQ,OTC">
+        </div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button id="search" class="btn">Search</button>
+        <button id="exportCsv" class="btn secondary">Export CSV</button>
+        <span class="warn" id="warn"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Ticker</th>
+              <th>Name</th>
+              <th>Exchange</th>
+              <th>Revenue</th>
+              <th>CFO</th>
+              <th>Total Debt</th>
+              <th>Accounts Payable</th>
+              <th>ADV ($)</th>
+              <th>Last Fundraising</th>
+              <th>Location</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const LS_KEY = 'ds_backend_url';
+
+    function n(v){ return v==null ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:0}); }
+
+    function backend(){
+      const url = $('backendUrl').value.trim();
+      if (!url) return null;
+      if (!/^https?:\/\//i.test(url)) return null;
+      return url.replace(/\/$/, '');
+    }
+
+    function setBackendStatus(url){
+      $('backendStatus').textContent = url ? ('Backend: ' + url) : 'Backend: not set';
+    }
+
+    function saveBackend(){
+      const url = backend();
+      if (!url){ $('warn').textContent = 'Please paste a valid https URL.'; return; }
+      localStorage.setItem(LS_KEY, url);
+      setBackendStatus(url);
+      $('warn').textContent = '';
+    }
+
+    async function search(){
+      const base = localStorage.getItem(LS_KEY) || backend();
+      if (!base){ $('warn').textContent = 'Set your backend URL first.'; return; }
+      const params = new URLSearchParams();
+      const fields = ['revenue_min','revenue_max','cfo_min','debt_max','ap_max','adv_min','location','exchanges'];
+      for (const f of fields){ const val = $(f).value.trim(); if (val) params.set(f, val); }
+      const btn = $('search'); btn.disabled = true; btn.textContent = 'Searching…';
+      try{
+        const res = await fetch(`${base}/api/search?` + params.toString());
+        const data = await res.json();
+        $('asof').textContent = data.date || '—';
+        const rows = data.items || [];
+        $('matchCount').textContent = 'Matches: ' + rows.length;
+        const tbody = $('rows');
+        tbody.innerHTML = rows.map(c => (
+          `<tr>
+            <td>${c.ticker || '—'}</td>
+            <td>${c.name || '—'}</td>
+            <td>${c.exchange || '—'}</td>
+            <td>${n(c.revenueLTMUSD)}</td>
+            <td>${n(c.cfoLTMUSD)}</td>
+            <td>${n(c.totalDebtUSD)}</td>
+            <td>${n(c.accountsPayableUSD)}</td>
+            <td>${n(c.advUSD)}</td>
+            <td>${c.lastFundraisingDate || '—'}</td>
+            <td>${c.location || '—'}</td>
+          </tr>`)).join('');
+      } catch(e){
+        $('warn').textContent = 'Search failed. Is your backend URL correct?';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Search';
+      }
+    }
+
+    function exportCsv(){
+      const rows = Array.from(document.querySelectorAll('#rows tr'));
+      if (!rows.length){ $('warn').textContent = 'Nothing to export yet.'; return; }
+      const headers = ['Ticker','Name','Exchange','Revenue','CFO','Total Debt','Accounts Payable','ADV ($)','Last Fundraising','Location'];
+      const data = rows.map(tr => Array.from(tr.children).map(td => '"' + (td.textContent||'').replaceAll('"','""') + '"'));
+      const csv = [headers.map(h=>'"'+h+'"').join(','), ...data.map(r=>r.join(','))].join('
+');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'deal_screener_results.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+
+    // Wire up
+    $('saveBackend').addEventListener('click', saveBackend);
+    $('search').addEventListener('click', search);
+    $('exportCsv').addEventListener('click', exportCsv);
+
+    // Restore saved backend URL
+    const saved = localStorage.getItem(LS_KEY);
+    if (saved){ $('backendUrl').value = saved; setBackendStatus(saved); }
+  </script>
+</body>
+</html>
