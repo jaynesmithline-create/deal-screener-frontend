@@ -111,7 +111,7 @@
   </div>
 
   <script>
-    // --- Configure a default backend so you don't have to press Save ---
+    // Pre-fill your backend so you don't have to press Save
     const DEFAULT_BACKEND_URL = 'https://deal-screener-backend-feev.onrender.com';
 
     const $ = (id) => document.getElementById(id);
@@ -181,8 +181,7 @@
       if (!rows.length){ $('warn').textContent = 'Nothing to export yet.'; return; }
       const headers = ['Ticker','Name','Exchange','Revenue','CFO','Total Debt','Accounts Payable','ADV ($)','Last Fundraising','Location'];
       const data = rows.map(tr => Array.from(tr.children).map(td => '"' + (td.textContent||'').replaceAll('"','""') + '"'));
-      const csv = [headers.map(h=>'"'+h+'"').join(','), ...data.map(r=>r.join(','))].join('
-');
+      const csv = [headers.map(h=>'"'+h+'"').join(','), ...data.map(r=>r.join(','))].join('\n');
       const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
