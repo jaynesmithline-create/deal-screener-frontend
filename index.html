@@ -111,16 +111,20 @@
   </div>
 
   <script>
+    // --- Configure a default backend so you don't have to press Save ---
+    const DEFAULT_BACKEND_URL = 'https://deal-screener-backend-feev.onrender.com';
+
     const $ = (id) => document.getElementById(id);
     const LS_KEY = 'ds_backend_url';
 
     function n(v){ return v==null ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:0}); }
 
-    function backend(){
-      const url = $('backendUrl').value.trim();
-      if (!url) return null;
-      if (!/^https?:\/\//i.test(url)) return null;
-      return url.replace(/\/$/, '');
+    function normalizeUrl(input){
+      let url = (input || '').trim();
+      if (!url) return '';
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url; // auto-prepend https
+      url = url.replace(/\/$/, ''); // drop trailing slash
+      return url;
     }
 
     function setBackendStatus(url){
@@ -128,7 +132,7 @@
     }
 
     function saveBackend(){
-      const url = backend();
+      const url = normalizeUrl($('backendUrl').value);
       if (!url){ $('warn').textContent = 'Please paste a valid https URL.'; return; }
       localStorage.setItem(LS_KEY, url);
       setBackendStatus(url);
@@ -136,11 +140,15 @@
     }
 
     async function search(){
-      const base = localStorage.getItem(LS_KEY) || backend();
+      const base = normalizeUrl(localStorage.getItem(LS_KEY) || $('backendUrl').value || DEFAULT_BACKEND_URL);
       if (!base){ $('warn').textContent = 'Set your backend URL first.'; return; }
+      localStorage.setItem(LS_KEY, base);
+      setBackendStatus(base);
+
       const params = new URLSearchParams();
       const fields = ['revenue_min','revenue_max','cfo_min','debt_max','ap_max','adv_min','location','exchanges'];
-      for (const f of fields){ const val = $(f).value.trim(); if (val) params.set(f, val); }
+      for (const f of fields){ const val = ($(f).value||'').trim(); if (val) params.set(f, val); }
+
       const btn = $('search'); btn.disabled = true; btn.textContent = 'Searching…';
       try{
         const res = await fetch(`${base}/api/search?` + params.toString());
@@ -162,11 +170,10 @@
             <td>${c.lastFundraisingDate || '—'}</td>
             <td>${c.location || '—'}</td>
           </tr>`)).join('');
+        $('warn').textContent = '';
       } catch(e){
         $('warn').textContent = 'Search failed. Is your backend URL correct?';
-      } finally {
-        btn.disabled = false; btn.textContent = 'Search';
-      }
+      } finally { btn.disabled = false; btn.textContent = 'Search'; }
     }
 
     function exportCsv(){
@@ -181,16 +188,21 @@
       a.href = URL.createObjectURL(blob);
       a.download = 'deal_screener_results.csv';
       document.body.appendChild(a); a.click(); a.remove();
+      $('warn').textContent = '';
     }
 
     // Wire up
     $('saveBackend').addEventListener('click', saveBackend);
     $('search').addEventListener('click', search);
     $('exportCsv').addEventListener('click', exportCsv);
+    $('backendUrl').addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ saveBackend(); } });
 
-    // Restore saved backend URL
-    const saved = localStorage.getItem(LS_KEY);
-    if (saved){ $('backendUrl').value = saved; setBackendStatus(saved); }
+    // On load: prefill backend from localStorage or default, and show status
+    (function init(){
+      const saved = normalizeUrl(localStorage.getItem(LS_KEY) || DEFAULT_BACKEND_URL);
+      $('backendUrl').value = saved;
+      if (saved) { localStorage.setItem(LS_KEY, saved); setBackendStatus(saved); }
+    })();
   </script>
 </body>
 </html>
